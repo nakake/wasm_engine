@@ -1,0 +1,8 @@
+[package]
+name = "engine-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glam = { version = "0.30.9", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
