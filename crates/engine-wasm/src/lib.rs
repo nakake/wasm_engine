@@ -4,6 +4,9 @@ use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 use web_sys::HtmlCanvasElement;
 
+use engine_core::{World, EntityId, Transform, Name};
+use glam::{Vec3, Quat};
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
@@ -123,10 +126,14 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Surface 作成
+        // Surface 作成（wasm32ターゲット用）
+        #[cfg(target_arch = "wasm32")]
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| JsValue::from_str(&format!("Failed to create surface: {:?}", e)))?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface: wgpu::Surface<'static> = unreachable!("This code is only for wasm32 target");
 
         // Adapter 取得
         let adapter = instance
@@ -330,4 +337,123 @@ impl Renderer {
 #[wasm_bindgen]
 pub fn greet(name: &str) -> String {
     format!("Hello Hello, {}!", name)
+}
+
+/// Engine構造体
+/// WorldとRendererを統合し、JSから操作可能なAPIを提供
+#[wasm_bindgen]
+pub struct Engine {
+    world: World,
+    renderer: Renderer,
+}
+
+#[wasm_bindgen]
+impl Engine {
+    /// 新しいEngineを作成（非同期）
+    pub async fn create(canvas: HtmlCanvasElement) -> Result<Engine, JsValue> {
+        console_log!("Creating Engine...");
+        let renderer = Renderer::create(canvas).await?;
+        let world = World::new();
+        console_log!("Engine created successfully");
+        Ok(Self { world, renderer })
+    }
+
+    /// Entityを作成し、IDを返す
+    pub fn create_entity(&mut self, name: &str) -> u32 {
+        let entity = self.world.spawn();
+        self.world.insert(entity, Name::new(name));
+        self.world.insert(entity, Transform::identity());
+        console_log!("Created entity: {} (id: {})", name, entity.to_u32());
+        entity.to_u32()
+    }
+
+    /// Entityを削除
+    pub fn delete_entity(&mut self, id: u32) -> bool {
+        let entity = EntityId::from_u32(id);
+        let result = self.world.despawn(entity);
+        if result {
+            console_log!("Deleted entity: {}", id);
+        }
+        result
+    }
+
+    /// 位置を設定
+    pub fn set_position(&mut self, id: u32, x: f32, y: f32, z: f32) {
+        let entity = EntityId::from_u32(id);
+        if let Some(transform) = self.world.get_mut::<Transform>(entity) {
+            transform.position = Vec3::new(x, y, z);
+        }
+    }
+
+    /// 回転を設定（クォータニオン）
+    pub fn set_rotation(&mut self, id: u32, x: f32, y: f32, z: f32, w: f32) {
+        let entity = EntityId::from_u32(id);
+        if let Some(transform) = self.world.get_mut::<Transform>(entity) {
+            transform.rotation = Quat::from_xyzw(x, y, z, w);
+        }
+    }
+
+    /// スケールを設定
+    pub fn set_scale(&mut self, id: u32, x: f32, y: f32, z: f32) {
+        let entity = EntityId::from_u32(id);
+        if let Some(transform) = self.world.get_mut::<Transform>(entity) {
+            transform.scale = Vec3::new(x, y, z);
+        }
+    }
+
+    /// 位置を取得（x, y, zの配列）
+    pub fn get_position(&self, id: u32) -> Option<Vec<f32>> {
+        let entity = EntityId::from_u32(id);
+        self.world.get::<Transform>(entity).map(|t| vec![t.position.x, t.position.y, t.position.z])
+    }
+
+    /// 回転を取得（x, y, z, wの配列）
+    pub fn get_rotation(&self, id: u32) -> Option<Vec<f32>> {
+        let entity = EntityId::from_u32(id);
+        self.world.get::<Transform>(entity).map(|t| vec![t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w])
+    }
+
+    /// スケールを取得（x, y, zの配列）
+    pub fn get_scale(&self, id: u32) -> Option<Vec<f32>> {
+        let entity = EntityId::from_u32(id);
+        self.world.get::<Transform>(entity).map(|t| vec![t.scale.x, t.scale.y, t.scale.z])
+    }
+
+    /// Entity名を取得
+    pub fn get_name(&self, id: u32) -> Option<String> {
+        let entity = EntityId::from_u32(id);
+        self.world.get::<Name>(entity).map(|n| n.as_str().to_string())
+    }
+
+    /// Entityが生存しているか確認
+    pub fn is_alive(&self, id: u32) -> bool {
+        let entity = EntityId::from_u32(id);
+        self.world.is_alive(entity)
+    }
+
+    /// Entity数を取得
+    pub fn entity_count(&self) -> usize {
+        self.world.entity_count()
+    }
+
+    /// フレーム更新（レンダリング含む）
+    pub fn tick(&mut self, _delta_time: f32) -> Result<(), JsValue> {
+        // 将来: delta_timeを使ったシステム更新
+        self.renderer.render()
+    }
+
+    /// Canvasリサイズ
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.renderer.resize(width, height);
+    }
+
+    /// 幅取得
+    pub fn width(&self) -> u32 {
+        self.renderer.width()
+    }
+
+    /// 高さ取得
+    pub fn height(&self) -> u32 {
+        self.renderer.height()
+    }
 }

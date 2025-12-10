@@ -6,4 +6,5 @@ Cargo.lock
 node_modules/
 
 .claude/
+
 .vscode/
