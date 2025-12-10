@@ -156,6 +156,13 @@ impl World {
         self.entities.iter().filter(|meta| meta.alive).count()
     }
 
+    /// 指定したコンポーネントを持つEntityとコンポーネントをイテレート
+    pub fn iter_with<T: Component>(&self) -> impl Iterator<Item = (EntityId, &T)> {
+        self.iter_entities().filter_map(|entity| {
+            self.get::<T>(entity).map(|component| (entity, component))
+        })
+    }
+
     /// 型に対応するストレージを取得または作成
     fn get_or_create_storage<T: Component>(&mut self) -> &mut ComponentStorage<T> {
         let type_id = TypeId::of::<T>();
