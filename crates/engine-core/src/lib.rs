@@ -3,5 +3,5 @@ pub mod math;
 pub mod components;
 
 // Re-exports
-pub use ecs::{EntityId, World};
+pub use ecs::{EntityId, World, QueryDescriptor, QueryResult};
 pub use components::{Transform, ModelUniform, Name};

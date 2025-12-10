@@ -3,8 +3,12 @@
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 use web_sys::HtmlCanvasElement;
+use js_sys::Function;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
-use engine_core::{EntityId, ModelUniform, Name, Transform, World};
+use engine_core::{EntityId, ModelUniform, Name, QueryDescriptor, QueryResult, Transform, World};
 use engine_renderer::{Camera, Mesh, Vertex};
 use glam::{Quat, Vec3};
 
@@ -626,12 +630,63 @@ pub fn greet(name: &str) -> String {
     format!("Hello Hello, {}!", name)
 }
 
+/// クエリ結果のハッシュを計算
+fn calculate_hash(result: &QueryResult) -> u64 {
+    let json = serde_json::to_string(result).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// クエリ購読情報
+struct QuerySubscription {
+    query: QueryDescriptor,
+    callback: Function,
+    last_result_hash: u64,
+}
+
+/// 購読マネージャー
+struct QuerySubscriptionManager {
+    subscriptions: HashMap<u32, QuerySubscription>,
+    next_id: u32,
+}
+
+impl QuerySubscriptionManager {
+    pub fn new() -> Self {
+        Self {
+            subscriptions: HashMap::new(),
+            next_id: 1,
+        }
+    }
+
+    pub fn subscribe(&mut self, query: QueryDescriptor, callback: Function) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.subscriptions.insert(
+            id,
+            QuerySubscription {
+                query,
+                callback,
+                last_result_hash: 0,
+            },
+        );
+
+        id
+    }
+
+    pub fn unsubscribe(&mut self, id: u32) -> bool {
+        self.subscriptions.remove(&id).is_some()
+    }
+}
+
 /// Engine構造体
 /// WorldとRendererを統合し、JSから操作可能なAPIを提供
 #[wasm_bindgen]
 pub struct Engine {
     world: World,
     renderer: Renderer,
+    subscriptions: QuerySubscriptionManager,
 }
 
 #[wasm_bindgen]
@@ -641,8 +696,13 @@ impl Engine {
         console_log!("Creating Engine...");
         let renderer = Renderer::create(canvas).await?;
         let world = World::new();
+        let subscriptions = QuerySubscriptionManager::new();
         console_log!("Engine created successfully");
-        Ok(Self { world, renderer })
+        Ok(Self {
+            world,
+            renderer,
+            subscriptions,
+        })
     }
 
     /// Entityを作成し、IDを返す
@@ -651,6 +711,7 @@ impl Engine {
         self.world.insert(entity, Name::new(name));
         self.world.insert(entity, Transform::identity());
         console_log!("Created entity: {} (id: {})", name, entity.to_u32());
+        self.check_subscriptions();
         entity.to_u32()
     }
 
@@ -660,6 +721,7 @@ impl Engine {
         let result = self.world.despawn(entity);
         if result {
             console_log!("Deleted entity: {}", id);
+            self.check_subscriptions();
         }
         result
     }
@@ -669,6 +731,7 @@ impl Engine {
         let entity = EntityId::from_u32(id);
         if let Some(transform) = self.world.get_mut::<Transform>(entity) {
             transform.position = Vec3::new(x, y, z);
+            self.check_subscriptions();
         }
     }
 
@@ -677,6 +740,7 @@ impl Engine {
         let entity = EntityId::from_u32(id);
         if let Some(transform) = self.world.get_mut::<Transform>(entity) {
             transform.rotation = Quat::from_xyzw(x, y, z, w);
+            self.check_subscriptions();
         }
     }
 
@@ -685,6 +749,7 @@ impl Engine {
         let entity = EntityId::from_u32(id);
         if let Some(transform) = self.world.get_mut::<Transform>(entity) {
             transform.scale = Vec3::new(x, y, z);
+            self.check_subscriptions();
         }
     }
 
@@ -755,5 +820,79 @@ impl Engine {
     /// 高さ取得
     pub fn height(&self) -> u32 {
         self.renderer.height()
+    }
+
+    /// クエリ実行
+    ///
+    /// # Arguments
+    /// * `query_json` - QueryDescriptor の JSON文字列
+    ///
+    /// # Returns
+    /// QueryResult の JsValue（JSON形式）
+    pub fn execute_query(&self, query_json: &str) -> Result<JsValue, JsValue> {
+        // JSONパース
+        let query: QueryDescriptor = serde_json::from_str(query_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid query JSON: {}", e)))?;
+
+        // クエリ実行
+        let result = self.world.execute_query(&query);
+
+        // JsValueに変換
+        serde_wasm_bindgen::to_value(&result)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    /// クエリを購読
+    ///
+    /// # Arguments
+    /// * `query_json` - QueryDescriptor の JSON文字列
+    /// * `callback` - 結果変更時に呼ばれる関数
+    ///
+    /// # Returns
+    /// subscription_id
+    pub fn subscribe_query(
+        &mut self,
+        query_json: &str,
+        callback: Function,
+    ) -> Result<u32, JsValue> {
+        let query: QueryDescriptor = serde_json::from_str(query_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid query JSON: {}", e)))?;
+
+        let id = self.subscriptions.subscribe(query, callback);
+
+        // 初回実行
+        self.notify_subscription(id);
+
+        Ok(id)
+    }
+
+    /// 購読解除
+    pub fn unsubscribe_query(&mut self, subscription_id: u32) -> bool {
+        self.subscriptions.unsubscribe(subscription_id)
+    }
+
+    /// 全購読のチェック・通知
+    fn check_subscriptions(&mut self) {
+        let ids: Vec<u32> = self.subscriptions.subscriptions.keys().copied().collect();
+        for id in ids {
+            self.notify_subscription(id);
+        }
+    }
+
+    /// 単一の購読を通知
+    fn notify_subscription(&mut self, id: u32) {
+        if let Some(sub) = self.subscriptions.subscriptions.get_mut(&id) {
+            let result = self.world.execute_query(&sub.query);
+            let hash = calculate_hash(&result);
+
+            if hash != sub.last_result_hash {
+                sub.last_result_hash = hash;
+
+                // コールバック呼び出し
+                if let Ok(js_result) = serde_wasm_bindgen::to_value(&result) {
+                    let _ = sub.callback.call1(&JsValue::NULL, &js_result);
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use super::entity::EntityId;
 use super::component::Component;
 use super::storage::ComponentStorage;
+use super::query::{QueryDescriptor, QueryResult, QueryResultRow, FilterExpr, FilterValue, SortDirection};
+use crate::components::{Transform, Name};
 
 /// Entity生存情報
 struct EntityMeta {
@@ -192,6 +194,165 @@ impl World {
             .as_any_mut()
             .downcast_mut::<ComponentStorage<T>>()
     }
+
+    // ========================================================================
+    // Query System
+    // ========================================================================
+
+    /// クエリを実行
+    pub fn execute_query(&self, query: &QueryDescriptor) -> QueryResult {
+        // 1. 全生存Entityを取得
+        let mut candidates: Vec<EntityId> = self.iter_entities().collect();
+
+        // 2. with_components でフィルタリング
+        for component_name in &query.with_components {
+            candidates.retain(|&entity| self.has_component(entity, component_name));
+        }
+
+        // 3. without_components で除外
+        for component_name in &query.without_components {
+            candidates.retain(|&entity| !self.has_component(entity, component_name));
+        }
+
+        // 4. filters で条件フィルタ
+        for filter in &query.filters {
+            candidates.retain(|&entity| self.evaluate_filter(entity, filter));
+        }
+
+        let total_count = candidates.len();
+
+        // 5. order_by でソート（Task 05で詳細実装）
+        if let Some(ref order) = query.order_by {
+            candidates.sort_by(|&a, &b| {
+                let val_a = self.extract_field(a, &order.field);
+                let val_b = self.extract_field(b, &order.field);
+                let cmp = Self::compare_json_values(&val_a, &val_b);
+                match order.direction {
+                    SortDirection::Asc => cmp,
+                    SortDirection::Desc => cmp.reverse(),
+                }
+            });
+        }
+
+        // 6. limit で件数制限
+        if let Some(limit) = query.limit {
+            candidates.truncate(limit);
+        }
+
+        // 7. select でフィールド抽出して結果を構築
+        let rows: Vec<QueryResultRow> = candidates
+            .into_iter()
+            .map(|entity| {
+                let mut row = QueryResultRow::new(entity.to_u32());
+
+                // selectが空の場合はidのみ返す
+                if query.select.is_empty() {
+                    row.set_field("id", serde_json::json!(entity.to_u32()));
+                } else {
+                    for field in &query.select {
+                        if let Some(value) = self.extract_field(entity, field) {
+                            row.set_field(field.clone(), value);
+                        }
+                    }
+                }
+
+                row
+            })
+            .collect();
+
+        QueryResult { rows, total_count }
+    }
+
+    /// Entityから指定フィールドの値を取得
+    fn extract_field(&self, entity: EntityId, field: &str) -> Option<serde_json::Value> {
+        match field {
+            "id" => Some(serde_json::json!(entity.to_u32())),
+            "name" => self
+                .get::<Name>(entity)
+                .map(|n| serde_json::json!(n.as_str())),
+            "position" => self.get::<Transform>(entity).map(|t| {
+                serde_json::json!({
+                    "x": t.position.x,
+                    "y": t.position.y,
+                    "z": t.position.z,
+                })
+            }),
+            "position.x" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.position.x)),
+            "position.y" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.position.y)),
+            "position.z" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.position.z)),
+            "rotation" => self.get::<Transform>(entity).map(|t| {
+                serde_json::json!({
+                    "x": t.rotation.x,
+                    "y": t.rotation.y,
+                    "z": t.rotation.z,
+                    "w": t.rotation.w,
+                })
+            }),
+            "scale" => self.get::<Transform>(entity).map(|t| {
+                serde_json::json!({
+                    "x": t.scale.x,
+                    "y": t.scale.y,
+                    "z": t.scale.z,
+                })
+            }),
+            "scale.x" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.scale.x)),
+            "scale.y" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.scale.y)),
+            "scale.z" => self
+                .get::<Transform>(entity)
+                .map(|t| serde_json::json!(t.scale.z)),
+            _ => None,
+        }
+    }
+
+    /// コンポーネントの存在チェック
+    fn has_component(&self, entity: EntityId, component_name: &str) -> bool {
+        match component_name {
+            "Transform" => self.get::<Transform>(entity).is_some(),
+            "Name" => self.get::<Name>(entity).is_some(),
+            // カスタムコンポーネントは動的登録が必要（Phase 4以降）
+            _ => false,
+        }
+    }
+
+    /// フィルター条件を評価
+    fn evaluate_filter(&self, entity: EntityId, filter: &FilterExpr) -> bool {
+        let field_value = match self.extract_field(entity, &filter.field) {
+            Some(v) => FilterValue::from_json(v),
+            None => return false, // フィールドなし = マッチしない
+        };
+
+        filter.op.compare_values(&field_value, &filter.value)
+    }
+
+    /// JSON値の比較（ソート用）
+    fn compare_json_values(
+        a: &Option<serde_json::Value>,
+        b: &Option<serde_json::Value>,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        match (a, b) {
+            (Some(serde_json::Value::Number(a)), Some(serde_json::Value::Number(b))) => {
+                let a_f = a.as_f64().unwrap_or(0.0);
+                let b_f = b.as_f64().unwrap_or(0.0);
+                a_f.partial_cmp(&b_f).unwrap_or(Ordering::Equal)
+            }
+            (Some(serde_json::Value::String(a)), Some(serde_json::Value::String(b))) => a.cmp(b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            _ => Ordering::Equal,
+        }
+    }
 }
 
 impl Default for World {
@@ -353,5 +514,141 @@ mod tests {
         assert_eq!(world.get::<Position>(entity), None);
         assert_eq!(world.get_mut::<Position>(entity), None);
         assert_eq!(world.remove::<Position>(entity), None);
+    }
+
+    // ========================================================================
+    // execute_query tests
+    // ========================================================================
+
+    use crate::components::{Transform as RealTransform, Name as RealName};
+    use crate::ecs::query::{QueryDescriptor, FilterExpr, FilterValue, OrderBy};
+    use glam::Vec3;
+
+    #[test]
+    fn test_execute_query_basic() {
+        let mut world = World::new();
+
+        // 3つのEntityを作成
+        let e1 = world.spawn();
+        world.insert(e1, RealName::new("Entity1"));
+        world.insert(e1, RealTransform::from_position(Vec3::new(1.0, 0.0, 0.0)));
+
+        let e2 = world.spawn();
+        world.insert(e2, RealName::new("Entity2"));
+        world.insert(e2, RealTransform::from_position(Vec3::new(2.0, 0.0, 0.0)));
+
+        let e3 = world.spawn();
+        world.insert(e3, RealName::new("Entity3"));
+        // Transformなし
+
+        // Transformを持つEntityをクエリ
+        let query = QueryDescriptor::new()
+            .select(["id", "name"])
+            .with(["Transform"]);
+
+        let result = world.execute_query(&query);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.total_count, 2);
+    }
+
+    #[test]
+    fn test_execute_query_without() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, RealName::new("WithTransform"));
+        world.insert(e1, RealTransform::identity());
+
+        let e2 = world.spawn();
+        world.insert(e2, RealName::new("WithoutTransform"));
+
+        // Transformを持たないEntityをクエリ
+        let query = QueryDescriptor::new()
+            .select(["name"])
+            .with(["Name"])
+            .without(["Transform"]);
+
+        let result = world.execute_query(&query);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.rows[0].get_field("name"),
+            Some(&serde_json::json!("WithoutTransform"))
+        );
+    }
+
+    #[test]
+    fn test_execute_query_filter() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, RealName::new("Left"));
+        world.insert(e1, RealTransform::from_position(Vec3::new(-5.0, 0.0, 0.0)));
+
+        let e2 = world.spawn();
+        world.insert(e2, RealName::new("Right"));
+        world.insert(e2, RealTransform::from_position(Vec3::new(5.0, 0.0, 0.0)));
+
+        // position.x > 0 のEntityをクエリ
+        let query = QueryDescriptor::new()
+            .select(["name", "position.x"])
+            .with(["Transform"])
+            .filter(FilterExpr::gt("position.x", FilterValue::Number(0.0)));
+
+        let result = world.execute_query(&query);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.rows[0].get_field("name"),
+            Some(&serde_json::json!("Right"))
+        );
+    }
+
+    #[test]
+    fn test_execute_query_order_by() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, RealName::new("C"));
+        world.insert(e1, RealTransform::from_position(Vec3::new(3.0, 0.0, 0.0)));
+
+        let e2 = world.spawn();
+        world.insert(e2, RealName::new("A"));
+        world.insert(e2, RealTransform::from_position(Vec3::new(1.0, 0.0, 0.0)));
+
+        let e3 = world.spawn();
+        world.insert(e3, RealName::new("B"));
+        world.insert(e3, RealTransform::from_position(Vec3::new(2.0, 0.0, 0.0)));
+
+        // position.xで昇順ソート
+        let query = QueryDescriptor::new()
+            .select(["name", "position.x"])
+            .with(["Transform"])
+            .order_by(OrderBy::asc("position.x"));
+
+        let result = world.execute_query(&query);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.rows[0].get_field("name"), Some(&serde_json::json!("A")));
+        assert_eq!(result.rows[1].get_field("name"), Some(&serde_json::json!("B")));
+        assert_eq!(result.rows[2].get_field("name"), Some(&serde_json::json!("C")));
+    }
+
+    #[test]
+    fn test_execute_query_limit() {
+        let mut world = World::new();
+
+        for i in 0..10 {
+            let e = world.spawn();
+            world.insert(e, RealName::new(format!("Entity{}", i)));
+            world.insert(e, RealTransform::identity());
+        }
+
+        // 上位3件のみ取得
+        let query = QueryDescriptor::new()
+            .select(["name"])
+            .with(["Transform"])
+            .limit(3);
+
+        let result = world.execute_query(&query);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.total_count, 10); // limit前の総数
     }
 }

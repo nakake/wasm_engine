@@ -1,5 +1,6 @@
-import type { EntityId, Vec3, Quat, EntityData, Transform } from './types';
+import type { EntityId, Vec3, Quat, EntityData, Transform, QueryDescriptor, QueryResult } from './types';
 import { Vec3 as Vec3Helper, Quat as QuatHelper } from './types';
+import { EntityQueryBuilder } from './query';
 
 // WASMエンジン型（wasm-packで生成される）
 interface WasmEngine {
@@ -18,6 +19,9 @@ interface WasmEngine {
   resize(width: number, height: number): void;
   width(): number;
   height(): number;
+  execute_query(query_json: string): QueryResult;
+  subscribe_query(query_json: string, callback: (result: QueryResult) => void): number;
+  unsubscribe_query(subscription_id: number): boolean;
   free(): void;
 }
 
@@ -214,6 +218,45 @@ export class EngineAPI {
    */
   getHeight(): number {
     return this.getEngine().height();
+  }
+
+  /**
+   * 新しいクエリビルダーを作成
+   */
+  query(): EntityQueryBuilder {
+    return new EntityQueryBuilder();
+  }
+
+  /**
+   * クエリを実行
+   */
+  executeQuery(query: EntityQueryBuilder | QueryDescriptor): QueryResult {
+    const json = query instanceof EntityQueryBuilder
+      ? query.toJSON()
+      : JSON.stringify(query);
+
+    return this.getEngine().execute_query(json);
+  }
+
+  /**
+   * クエリを購読
+   */
+  subscribeQuery(
+    query: EntityQueryBuilder | QueryDescriptor,
+    callback: (result: QueryResult) => void
+  ): number {
+    const json = query instanceof EntityQueryBuilder
+      ? query.toJSON()
+      : JSON.stringify(query);
+
+    return this.getEngine().subscribe_query(json, callback);
+  }
+
+  /**
+   * 購読解除
+   */
+  unsubscribeQuery(subscriptionId: number): boolean {
+    return this.getEngine().unsubscribe_query(subscriptionId);
   }
 
   /**
