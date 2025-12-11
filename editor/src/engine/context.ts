@@ -9,7 +9,7 @@ import type { EngineAPI } from './EngineAPI';
 const EngineContext = createContext<EngineAPI | null>(null);
 
 export interface EngineProviderProps {
-  engine: EngineAPI;
+  engine: EngineAPI | null;
   children: ReactNode;
 }
 
@@ -30,4 +30,12 @@ export function useEngine(): EngineAPI {
     throw new Error('useEngine must be used within EngineProvider');
   }
   return engine;
+}
+
+/**
+ * EngineAPIを取得するフック（null許容版）
+ * engineが未初期化の場合はnullを返す
+ */
+export function useEngineOrNull(): EngineAPI | null {
+  return useContext(EngineContext);
 }

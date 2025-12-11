@@ -19,8 +19,21 @@ export interface Quat {
 
 /**
  * Entity識別子（Rustのu32）
+ * packed format: (generation << 20) | index
  */
 export type EntityId = number;
+
+/**
+ * EntityIdヘルパー関数
+ */
+export const EntityId = {
+  /** Packed IDからindexを取得 */
+  index: (id: EntityId): number => id & 0xFFFFF,
+  /** Packed IDからgenerationを取得 */
+  generation: (id: EntityId): number => id >> 20,
+  /** index と generation から packed ID を作成 */
+  pack: (index: number, generation: number): EntityId => (generation << 20) | index,
+};
 
 /**
  * Transformコンポーネントデータ
@@ -116,3 +129,15 @@ export interface QueryResult {
   rows: QueryResultRow[];
   total_count: number;
 }
+
+// ========== Gizmo Types ==========
+
+/**
+ * Gizmoモード
+ */
+export type GizmoMode = 'translate' | 'rotate' | 'scale';
+
+/**
+ * Gizmo軸
+ */
+export type GizmoAxis = 'none' | 'x' | 'y' | 'z' | 'xy' | 'yz' | 'xz' | 'all';

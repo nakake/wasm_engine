@@ -1,4 +1,4 @@
-import type { EntityId, Vec3, Quat, EntityData, Transform, QueryDescriptor, QueryResult } from './types';
+import type { EntityId, Vec3, Quat, EntityData, Transform, QueryDescriptor, QueryResult, GizmoMode, GizmoAxis } from './types';
 import { Vec3 as Vec3Helper, Quat as QuatHelper } from './types';
 import { EntityQueryBuilder } from './query';
 
@@ -9,6 +9,7 @@ interface WasmEngine {
   set_position(id: number, x: number, y: number, z: number): void;
   set_rotation(id: number, x: number, y: number, z: number, w: number): void;
   set_scale(id: number, x: number, y: number, z: number): void;
+  set_name(id: number, name: string): void;
   get_position(id: number): number[] | undefined;
   get_rotation(id: number): number[] | undefined;
   get_scale(id: number): number[] | undefined;
@@ -22,6 +23,30 @@ interface WasmEngine {
   execute_query(query_json: string): QueryResult;
   subscribe_query(query_json: string, callback: (result: QueryResult) => void): number;
   unsubscribe_query(subscription_id: number): boolean;
+  // Camera API
+  orbit_camera(delta_x: number, delta_y: number): void;
+  pan_camera(delta_x: number, delta_y: number): void;
+  zoom_camera(delta: number): void;
+  set_camera_target(x: number, y: number, z: number): void;
+  get_camera_position(): number[];
+  get_camera_target(): number[];
+  // Picking API
+  pick_entity(screen_x: number, screen_y: number): number;
+  screen_to_world(screen_x: number, screen_y: number, depth: number): number[];
+  // Gizmo API
+  set_gizmo_mode(mode: string): void;
+  set_gizmo_visible(visible: boolean): void;
+  set_gizmo_position(x: number, y: number, z: number): void;
+  set_gizmo_rotation(x: number, y: number, z: number, w: number): void;
+  set_gizmo_hovered_axis(axis: string): void;
+  set_gizmo_active_axis(axis: string): void;
+  is_gizmo_visible(): boolean;
+  // Gizmo Interaction API
+  gizmo_hit_test(screen_x: number, screen_y: number): string;
+  start_gizmo_drag(screen_x: number, screen_y: number): string;
+  update_gizmo_drag(screen_x: number, screen_y: number): number[];
+  update_gizmo_drag_rotate(screen_x: number, screen_y: number): number[];
+  end_gizmo_drag(): void;
   free(): void;
 }
 
@@ -143,6 +168,14 @@ export class EngineAPI {
   }
 
   /**
+   * Entity名を設定
+   */
+  setName(id: EntityId, name: string): void {
+    this.getEngine().set_name(id, name);
+    this.entities.set(id, name);
+  }
+
+  /**
    * Entityが生存しているか確認
    */
   isAlive(id: EntityId): boolean {
@@ -257,6 +290,279 @@ export class EngineAPI {
    */
   unsubscribeQuery(subscriptionId: number): boolean {
     return this.getEngine().unsubscribe_query(subscriptionId);
+  }
+
+  // ========================================================================
+  // カメラ操作 API
+  // ========================================================================
+
+  /**
+   * カメラをターゲット周りで回転（Orbit）
+   * @param deltaX 水平方向の回転量（ラジアン）
+   * @param deltaY 垂直方向の回転量（ラジアン）
+   */
+  orbitCamera(deltaX: number, deltaY: number): void {
+    this.getEngine().orbit_camera(deltaX, deltaY);
+  }
+
+  /**
+   * カメラを平行移動（Pan）
+   * @param deltaX 右方向への移動量
+   * @param deltaY 上方向への移動量
+   */
+  panCamera(deltaX: number, deltaY: number): void {
+    this.getEngine().pan_camera(deltaX, deltaY);
+  }
+
+  /**
+   * カメラをズーム
+   * @param delta 正で近づく、負で遠ざかる
+   */
+  zoomCamera(delta: number): void {
+    this.getEngine().zoom_camera(delta);
+  }
+
+  /**
+   * カメラターゲットを設定
+   */
+  setCameraTarget(target: Vec3): void {
+    this.getEngine().set_camera_target(target.x, target.y, target.z);
+  }
+
+  /**
+   * カメラ位置を取得
+   */
+  getCameraPosition(): Vec3 {
+    const arr = this.getEngine().get_camera_position();
+    return Vec3Helper.fromArray(arr);
+  }
+
+  /**
+   * カメラターゲットを取得
+   */
+  getCameraTarget(): Vec3 {
+    const arr = this.getEngine().get_camera_target();
+    return Vec3Helper.fromArray(arr);
+  }
+
+  /**
+   * 特定のEntityにカメラをフォーカス
+   */
+  focusOnEntity(id: EntityId): void {
+    const pos = this.getPosition(id);
+    if (pos) {
+      this.setCameraTarget(pos);
+    }
+  }
+
+  // ========================================================================
+  // Entity Picking API
+  // ========================================================================
+
+  /**
+   * スクリーン座標からEntityを取得（レイキャスト）
+   * @param screenX スクリーンX座標 (0.0 = 左端, 1.0 = 右端)
+   * @param screenY スクリーンY座標 (0.0 = 上端, 1.0 = 下端)
+   * @returns 選択されたEntityのID、なければnull
+   */
+  pickEntity(screenX: number, screenY: number): EntityId | null {
+    const result = this.getEngine().pick_entity(screenX, screenY);
+    return result >= 0 ? result : null;
+  }
+
+  /**
+   * スクリーン座標をワールド座標に変換
+   * @param screenX スクリーンX座標 (0.0 〜 1.0)
+   * @param screenY スクリーンY座標 (0.0 〜 1.0)
+   * @param depth 深度値 (0 〜 1, 0が近、1が遠)
+   * @returns ワールド座標
+   */
+  screenToWorld(screenX: number, screenY: number, depth: number): Vec3 {
+    const arr = this.getEngine().screen_to_world(screenX, screenY, depth);
+    return Vec3Helper.fromArray(arr);
+  }
+
+  /**
+   * キャンバス座標からEntityをピックする便利メソッド
+   */
+  pickEntityAtCanvas(canvasX: number, canvasY: number): EntityId | null {
+    const width = this.getWidth();
+    const height = this.getHeight();
+    // Rust側は 0〜1 のスクリーン座標を期待
+    const screenX = canvasX / width;
+    const screenY = canvasY / height;
+    return this.pickEntity(screenX, screenY);
+  }
+
+  // ========================================================================
+  // Gizmo API
+  // ========================================================================
+
+  /**
+   * Gizmoモードを設定
+   */
+  setGizmoMode(mode: GizmoMode): void {
+    this.getEngine().set_gizmo_mode(mode);
+  }
+
+  /**
+   * Gizmoの表示/非表示を設定
+   */
+  setGizmoVisible(visible: boolean): void {
+    this.getEngine().set_gizmo_visible(visible);
+  }
+
+  /**
+   * Gizmoの位置を設定
+   */
+  setGizmoPosition(pos: Vec3): void {
+    this.getEngine().set_gizmo_position(pos.x, pos.y, pos.z);
+  }
+
+  /**
+   * Gizmoの回転を設定
+   */
+  setGizmoRotation(rot: Quat): void {
+    this.getEngine().set_gizmo_rotation(rot.x, rot.y, rot.z, rot.w);
+  }
+
+  /**
+   * ホバー中の軸を設定
+   */
+  setGizmoHoveredAxis(axis: GizmoAxis): void {
+    this.getEngine().set_gizmo_hovered_axis(axis);
+  }
+
+  /**
+   * アクティブな軸を設定（ドラッグ中）
+   */
+  setGizmoActiveAxis(axis: GizmoAxis): void {
+    this.getEngine().set_gizmo_active_axis(axis);
+  }
+
+  /**
+   * Gizmoが表示中か確認
+   */
+  isGizmoVisible(): boolean {
+    return this.getEngine().is_gizmo_visible();
+  }
+
+  /**
+   * 選択中EntityにGizmoを同期
+   */
+  syncGizmoToEntity(id: EntityId): void {
+    const transform = this.getTransform(id);
+    if (transform) {
+      this.setGizmoPosition(transform.position);
+      this.setGizmoRotation(transform.rotation);
+      this.setGizmoVisible(true);
+    }
+  }
+
+  /**
+   * Gizmoを非表示にする
+   */
+  hideGizmo(): void {
+    this.setGizmoVisible(false);
+  }
+
+  // ========================================================================
+  // Gizmo Interaction API
+  // ========================================================================
+
+  /**
+   * Gizmoヒットテスト
+   * @param screenX スクリーンX座標 (0.0〜1.0)
+   * @param screenY スクリーンY座標 (0.0〜1.0)
+   * @returns ヒットした軸 ("x", "y", "z", "xy", "yz", "xz", "all", "")
+   */
+  gizmoHitTest(screenX: number, screenY: number): GizmoAxis | '' {
+    const result = this.getEngine().gizmo_hit_test(screenX, screenY);
+    return result as GizmoAxis | '';
+  }
+
+  /**
+   * Gizmoドラッグ開始
+   * @param screenX スクリーンX座標 (0.0〜1.0)
+   * @param screenY スクリーンY座標 (0.0〜1.0)
+   * @returns ドラッグ開始した軸（""の場合はヒットなし）
+   */
+  startGizmoDrag(screenX: number, screenY: number): GizmoAxis | '' {
+    const result = this.getEngine().start_gizmo_drag(screenX, screenY);
+    return result as GizmoAxis | '';
+  }
+
+  /**
+   * Gizmoドラッグ更新（Translate/Scaleモード）
+   * @param screenX スクリーンX座標 (0.0〜1.0)
+   * @param screenY スクリーンY座標 (0.0〜1.0)
+   * @returns 移動/スケール変化量
+   */
+  updateGizmoDrag(screenX: number, screenY: number): Vec3 {
+    const arr = this.getEngine().update_gizmo_drag(screenX, screenY);
+    return Vec3Helper.fromArray(arr);
+  }
+
+  /**
+   * Gizmoドラッグ更新（Rotateモード）
+   * @param screenX スクリーンX座標 (0.0〜1.0)
+   * @param screenY スクリーンY座標 (0.0〜1.0)
+   * @returns 回転差分（Quaternion）
+   */
+  updateGizmoDragRotate(screenX: number, screenY: number): Quat {
+    const arr = this.getEngine().update_gizmo_drag_rotate(screenX, screenY);
+    return QuatHelper.fromArray(arr);
+  }
+
+  /**
+   * Gizmoドラッグ終了
+   */
+  endGizmoDrag(): void {
+    this.getEngine().end_gizmo_drag();
+  }
+
+  /**
+   * キャンバス座標からGizmoヒットテスト（便利メソッド）
+   */
+  gizmoHitTestAtCanvas(canvasX: number, canvasY: number): GizmoAxis | '' {
+    const width = this.getWidth();
+    const height = this.getHeight();
+    const screenX = canvasX / width;
+    const screenY = canvasY / height;
+    return this.gizmoHitTest(screenX, screenY);
+  }
+
+  /**
+   * キャンバス座標からGizmoドラッグ開始（便利メソッド）
+   */
+  startGizmoDragAtCanvas(canvasX: number, canvasY: number): GizmoAxis | '' {
+    const width = this.getWidth();
+    const height = this.getHeight();
+    const screenX = canvasX / width;
+    const screenY = canvasY / height;
+    return this.startGizmoDrag(screenX, screenY);
+  }
+
+  /**
+   * キャンバス座標でGizmoドラッグ更新（便利メソッド）
+   */
+  updateGizmoDragAtCanvas(canvasX: number, canvasY: number): Vec3 {
+    const width = this.getWidth();
+    const height = this.getHeight();
+    const screenX = canvasX / width;
+    const screenY = canvasY / height;
+    return this.updateGizmoDrag(screenX, screenY);
+  }
+
+  /**
+   * キャンバス座標でGizmoドラッグ更新（Rotateモード、便利メソッド）
+   */
+  updateGizmoDragRotateAtCanvas(canvasX: number, canvasY: number): Quat {
+    const width = this.getWidth();
+    const height = this.getHeight();
+    const screenX = canvasX / width;
+    const screenY = canvasY / height;
+    return this.updateGizmoDragRotate(screenX, screenY);
   }
 
   /**

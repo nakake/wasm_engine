@@ -219,17 +219,12 @@ pub enum ComponentFilter {
 // ============================================================================
 
 /// ソート方向
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SortDirection {
+    #[default]
     Asc,
     Desc,
-}
-
-impl Default for SortDirection {
-    fn default() -> Self {
-        SortDirection::Asc
-    }
 }
 
 /// ソート条件
