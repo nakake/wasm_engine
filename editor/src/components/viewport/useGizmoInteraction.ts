@@ -12,6 +12,7 @@ export function useGizmoInteraction(
   const engine = useEngineOrNull();
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const activeTool = useEditorStore((state) => state.activeTool);
+  const gizmoSpace = useEditorStore((state) => state.gizmoSpace);
 
   const isDraggingGizmo = useRef(false);
   const dragAxis = useRef<GizmoAxis | ''>('');
@@ -52,7 +53,7 @@ export function useGizmoInteraction(
                 z: currentPos.z + delta.z,
               });
               // Gizmo位置も更新
-              engine.syncGizmoToEntity(entityId);
+              engine.syncGizmoToEntity(entityId, gizmoSpace);
             }
           }
         } else if (activeTool === 'scale') {
@@ -76,7 +77,7 @@ export function useGizmoInteraction(
               // Quaternion乗算 (deltaRot * currentRot)
               const newRot = multiplyQuaternions(deltaRot, currentRot);
               engine.setRotation(entityId, newRot);
-              engine.syncGizmoToEntity(entityId);
+              engine.syncGizmoToEntity(entityId, gizmoSpace);
             }
           }
         }
@@ -92,7 +93,7 @@ export function useGizmoInteraction(
         }
       }
     },
-    [engine, selectedEntityIds, activeTool, getCanvasCoords, canvasRef]
+    [engine, selectedEntityIds, activeTool, gizmoSpace, getCanvasCoords, canvasRef]
   );
 
   // マウスダウン

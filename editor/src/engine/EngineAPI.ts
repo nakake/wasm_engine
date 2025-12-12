@@ -449,12 +449,20 @@ export class EngineAPI {
 
   /**
    * 選択中EntityにGizmoを同期
+   * @param id EntityId
+   * @param space Gizmo座標系 ('world' | 'local')
    */
-  syncGizmoToEntity(id: EntityId): void {
+  syncGizmoToEntity(id: EntityId, space: 'world' | 'local' = 'world'): void {
     const transform = this.getTransform(id);
     if (transform) {
       this.setGizmoPosition(transform.position);
-      this.setGizmoRotation(transform.rotation);
+      // World空間モードでは回転を適用しない（常にワールド軸）
+      // Local空間モードではEntityの回転に追従
+      if (space === 'local') {
+        this.setGizmoRotation(transform.rotation);
+      } else {
+        this.setGizmoRotation({ x: 0, y: 0, z: 0, w: 1 }); // 単位クォータニオン
+      }
       this.setGizmoVisible(true);
     }
   }

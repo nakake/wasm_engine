@@ -26,6 +26,7 @@ export function useGizmo() {
   const engine = useEngineOrNull();
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const activeTool = useEditorStore((state) => state.activeTool);
+  const gizmoSpace = useEditorStore((state) => state.gizmoSpace);
 
   // 選択Entityが変更されたらGizmo位置を更新
   useEffect(() => {
@@ -41,7 +42,7 @@ export function useGizmo() {
     if (selectedEntityIds.length === 1) {
       const id = selectedEntityIds[0];
       if (engine.isAlive(id)) {
-        engine.syncGizmoToEntity(id);
+        engine.syncGizmoToEntity(id, gizmoSpace);
       } else {
         engine.hideGizmo();
       }
@@ -52,9 +53,9 @@ export function useGizmo() {
     // 現在は最初のEntityの位置を使用
     const firstId = selectedEntityIds[0];
     if (engine.isAlive(firstId)) {
-      engine.syncGizmoToEntity(firstId);
+      engine.syncGizmoToEntity(firstId, gizmoSpace);
     }
-  }, [engine, selectedEntityIds]);
+  }, [engine, selectedEntityIds, gizmoSpace]);
 
   // アクティブツールが変更されたらGizmoモードを更新
   useEffect(() => {
@@ -100,9 +101,9 @@ export function useGizmo() {
 
     const id = selectedEntityIds[0];
     if (engine.isAlive(id)) {
-      engine.syncGizmoToEntity(id);
+      engine.syncGizmoToEntity(id, gizmoSpace);
     }
-  }, [engine, selectedEntityIds]);
+  }, [engine, selectedEntityIds, gizmoSpace]);
 
   return {
     setHoveredAxis,
