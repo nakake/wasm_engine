@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "build:wasm": "cd crates/engine-wasm && wasm-pack build --target web --out-dir ../../editor/src/wasm",
+    "build:editor": "cd editor && pnpm build",
+    "build": "pnpm build:wasm && pnpm build:editor",
     "dev:editor": "cd editor && pnpm dev",
     "dev": "pnpm build:wasm && pnpm dev:editor",
     "watch:rust": "cargo watch -w crates -s \"pnpm build:wasm\""
